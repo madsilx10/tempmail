@@ -15,7 +15,6 @@ const UA       = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, 
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-// Simpan & kirim cookie secara manual
 let cookieJar = {};
 
 function parseCookies(setCookieHeaders) {
@@ -34,40 +33,62 @@ function getCookieString() {
 
 (async () => {
   try {
-    // ─── STEP 1: GET login page → ambil CSRF cookie ───────────
+    // ─── STEP 1: GET m.kuku.lu/ → ambil csrf_token dari cookie (302) ──────
     console.log('[*] Ambil CSRF token...');
-    const getRes = await axios.get(`${BASE_URL}/smphone.app.index.php?pagemode_login=1&noindex=1`, {
+    const r1 = await axios.get(`${BASE_URL}/`, {
       headers: { 'User-Agent': UA },
-      maxRedirects: 5,
+      maxRedirects: 0,
+      validateStatus: s => s === 302 || s === 200,
     });
-    parseCookies(getRes.headers['set-cookie']);
-    console.log('[+] CSRF token:', cookieJar['cookie_csrf_token'] || 'tidak ditemukan');
+    parseCookies(r1.headers['set-cookie']);
+    console.log('[+] csrf_token:', cookieJar['cookie_csrf_token'] || 'tidak ditemukan');
 
-    // ─── STEP 2: POST login ───────────────────────────────────
+    // ─── STEP 2: GET id.php → ambil csrf_subtoken dari HTML ───────────────
+    const r2 = await axios.get(`${BASE_URL}/id.php`, {
+      headers: {
+        'User-Agent': UA,
+        'Cookie':     getCookieString(),
+      },
+    });
+    parseCookies(r2.headers['set-cookie']);
+
+    const html2 = String(r2.data);
+    // cari csrf_subtoken_check di form HTML
+    const csrfSubtoken = (
+      html2.match(/name="csrf_subtoken_check"\s+value="([^"]+)"/)?.[1] ||
+      html2.match(/csrf_subtoken_check['":\s]+([a-f0-9]{32,})/i)?.[1] ||
+      ''
+    );
+    console.log('[+] csrf_subtoken:', csrfSubtoken || 'tidak ditemukan');
+
+    // ─── STEP 3: POST login ke /index.php ─────────────────────────────────
     console.log('[*] Login...');
     const loginParams = new URLSearchParams({
-      action:              'login',
+      action:              'checkLogin',
+      confirmcode:         '',
       nopost:              '1',
+      csrf_token_check:    cookieJar['cookie_csrf_token'] || '',
+      csrf_subtoken_check: csrfSubtoken,
       number:              ID,
       password:            PASSWORD,
-      csrf_token_check:    cookieJar['cookie_csrf_token'] || '',
-      _:                   Date.now(),
+      syncconfirm:         'no',
     });
 
-    const loginRes = await axios.post(`${BASE_URL}/smphone.app.index.php`, loginParams.toString(), {
+    const loginRes = await axios.post(`${BASE_URL}/index.php`, loginParams.toString(), {
       headers: {
         'User-Agent':        UA,
         'Content-Type':      'application/x-www-form-urlencoded; charset=UTF-8',
         'X-Requested-With':  'XMLHttpRequest',
         'Origin':            BASE_URL,
+        'Referer':           `${BASE_URL}/id.php`,
         'Cookie':            getCookieString(),
       },
       maxRedirects: 5,
     });
     parseCookies(loginRes.headers['set-cookie']);
 
-    const loginBody = loginRes.data;
-    console.log('[+] Respon login:', String(loginBody).slice(0, 100));
+    const loginBody = String(loginRes.data);
+    console.log('[+] Respon login:', loginBody.slice(0, 100));
 
     if (!cookieJar['cookie_sessionhash']) {
       console.error('[!] Login gagal - session tidak ditemukan');
@@ -76,7 +97,7 @@ function getCookieString() {
     }
     console.log('[+] Login berhasil!');
 
-    // ─── STEP 3: Generate email ───────────────────────────────
+    // ─── STEP 4: Generate email ────────────────────────────────────────────
     const generated = [];
     console.log(`\n[*] Generate ${COUNT} email...\n`);
 
@@ -86,7 +107,7 @@ function getCookieString() {
         nopost:              '1',
         by_system:           '1',
         csrf_token_check:    cookieJar['cookie_csrf_token'] || '',
-        csrf_subtoken_check: '',
+        csrf_subtoken_check: csrfSubtoken,
         recaptcha_token:     '',
         _:                   Date.now(),
       });
@@ -110,7 +131,7 @@ function getCookieString() {
       await sleep(1200);
     }
 
-    // ─── STEP 4: List semua email ─────────────────────────────
+    // ─── STEP 5: List semua email ──────────────────────────────────────────
     console.log('\n[*] Fetch semua email dari akun...');
     const ts      = Date.now();
     const listRes = await axios.get(`${BASE_URL}/smphone.app.index._addrlist.php?t=${ts}&nopost=1&_=${ts}`, {

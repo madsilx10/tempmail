@@ -31,7 +31,8 @@ function request(method, path, body = null) {
     const headers = {
       "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
       "X-Requested-With": "XMLHttpRequest",
-      Accept: "*/*",
+      "Accept": "*/*",
+      "Accept-Encoding": "identity",
       Cookie: cookieString(),
     };
 
@@ -85,10 +86,9 @@ async function login() {
   const csrfToken = sessionCookies["cookie_csrf_token"];
   const subtoken = extractSubtoken(body);
 
-  // DEBUG
   const fs2 = require("fs");
   fs2.writeFileSync("debug_html.txt", body);
-  console.log("[DEBUG] HTML disimpan ke debug_html.txt");
+  console.log("[DEBUG] HTML length:", body.length);
   console.log("[DEBUG] csrf_token:", csrfToken);
   console.log("[DEBUG] subtoken:", subtoken);
 

@@ -1,6 +1,6 @@
 const https = require("https");
 const fs = require("fs");
-const readline = require("readline");
+const zlib = require("zlib");
 
 const BASE = "m.kuku.lu";
 
@@ -42,9 +42,25 @@ function request(method, path, body = null) {
 
     const req = https.request({ host: BASE, path, method, headers }, (res) => {
       parseCookies(res.headers);
-      let data = "";
-      res.on("data", (c) => (data += c));
-      res.on("end", () => resolve({ body: data, status: res.statusCode }));
+      const chunks = [];
+      res.on("data", (c) => chunks.push(c));
+      res.on("end", () => {
+        const buf = Buffer.concat(chunks);
+        const enc = res.headers["content-encoding"];
+        if (enc === "gzip") {
+          zlib.gunzip(buf, (err, decoded) => {
+            if (err) resolve({ body: buf.toString(), status: res.statusCode });
+            else resolve({ body: decoded.toString("utf8"), status: res.statusCode });
+          });
+        } else if (enc === "br") {
+          zlib.brotliDecompress(buf, (err, decoded) => {
+            if (err) resolve({ body: buf.toString(), status: res.statusCode });
+            else resolve({ body: decoded.toString("utf8"), status: res.statusCode });
+          });
+        } else {
+          resolve({ body: buf.toString("utf8"), status: res.statusCode });
+        }
+      });
     });
     req.on("error", reject);
     if (body) req.write(body);

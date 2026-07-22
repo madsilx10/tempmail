@@ -1,42 +1,51 @@
 const https = require("https");
-const fs = require("fs");
-const zlib = require("zlib");
-
-const BASE = "m.kuku.lu";
+const zlib  = require("zlib");
+const fs    = require("fs");
 
 // === CONFIG ===
-const ID = "ISI_ID_LO";
-const PASSWORD = "ISI_PASSWORD";
-const GENERATE_COUNT = parseInt(process.argv[2] || "5");
+const ID       = "ISI_ID_LO";
+const PASSWORD = "ISI_PASSWORD_LO";
+const COUNT    = parseInt(process.argv[2] || "5");
+const BASE     = "m.kuku.lu";
 
 let sessionCookies = {};
 
 function parseCookies(headers) {
-  const raw = headers["set-cookie"] || [];
-  raw.forEach((c) => {
+  (headers["set-cookie"] || []).forEach((c) => {
     const [pair] = c.split(";");
-    const [k, v] = pair.split("=");
-    if (k && v) sessionCookies[k.trim()] = v.trim();
+    const idx = pair.indexOf("=");
+    if (idx < 0) return;
+    const k = pair.slice(0, idx).trim();
+    const v = pair.slice(idx + 1).trim();
+    if (k) sessionCookies[k] = v;
   });
 }
 
 function cookieString() {
-  return Object.entries(sessionCookies)
-    .map(([k, v]) => `${k}=${v}`)
-    .join("; ");
+  return Object.entries(sessionCookies).map(([k, v]) => `${k}=${v}`).join("; ");
 }
 
-function request(method, path, body = null, redirectCount = 0) {
+function request(method, path, body = null, isXHR = false, redirectCount = 0) {
   return new Promise((resolve, reject) => {
     if (redirectCount > 5) return reject(new Error("Too many redirects"));
+
     const headers = {
       "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
-      "X-Requested-With": "XMLHttpRequest",
-      "Accept": "text/html,*/*",
-      "Accept-Encoding": "identity",
-      Cookie: cookieString(),
+      "Accept": isXHR ? "*/*" : "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8",
+      "Accept-Encoding": "gzip, deflate, br",
+      "Cookie": cookieString(),
     };
-
+    if (isXHR) {
+      headers["X-Requested-With"] = "XMLHttpRequest";
+      headers["Sec-Fetch-Mode"] = "cors";
+      headers["Sec-Fetch-Site"] = "same-origin";
+    } else {
+      headers["Sec-Fetch-Mode"] = "navigate";
+      headers["Sec-Fetch-Site"] = "same-origin";
+      headers["Sec-Fetch-User"] = "?1";
+      headers["Upgrade-Insecure-Requests"] = "1";
+    }
     if (body) {
       headers["Content-Type"] = "application/x-www-form-urlencoded";
       headers["Content-Length"] = Buffer.byteLength(body);
@@ -44,20 +53,25 @@ function request(method, path, body = null, redirectCount = 0) {
 
     const req = https.request({ host: BASE, path, method, headers }, (res) => {
       parseCookies(res.headers);
-
-      // follow redirect
       if ([301, 302, 303].includes(res.statusCode) && res.headers.location) {
         const loc = res.headers.location.replace(`https://${BASE}`, "");
-        console.log(`[*] Redirect → ${loc}`);
         res.resume();
-        return resolve(request("GET", loc, null, redirectCount + 1));
+        return resolve(request("GET", loc, null, isXHR, redirectCount + 1));
       }
 
       const chunks = [];
       res.on("data", (c) => chunks.push(c));
       res.on("end", () => {
         const buf = Buffer.concat(chunks);
-        resolve({ body: buf.toString("utf8"), status: res.statusCode });
+        const enc = (res.headers["content-encoding"] || "").toLowerCase();
+        const decode = (err, decoded) => {
+          if (err) resolve({ body: buf.toString("utf8"), status: res.statusCode });
+          else resolve({ body: decoded.toString("utf8"), status: res.statusCode });
+        };
+        if (enc === "gzip") zlib.gunzip(buf, decode);
+        else if (enc === "br") zlib.brotliDecompress(buf, decode);
+        else if (enc === "deflate") zlib.inflate(buf, decode);
+        else resolve({ body: buf.toString("utf8"), status: res.statusCode });
       });
     });
     req.on("error", reject);
@@ -66,31 +80,35 @@ function request(method, path, body = null, redirectCount = 0) {
   });
 }
 
-function sleep(ms) {
-  return new Promise((r) => setTimeout(r, ms));
-}
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 function extractSubtoken(html) {
-  const match = html.match(/csrf_subtoken[_\w]*["'\s:=]+([a-f0-9]{32})/);
-  return match ? match[1] : null;
+  const patterns = [
+    /csrf_subtoken_check["'\s:=]+([a-f0-9]{32})/,
+    /subtoken["'\s:=]+([a-f0-9]{32})/,
+    /name="csrf_subtoken[^"]*"[^>]*value="([a-f0-9]{32})"/,
+    /value="([a-f0-9]{32})"[^>]*name="csrf_subtoken/,
+  ];
+  for (const p of patterns) {
+    const m = html.match(p);
+    if (m) return m[1];
+  }
+  return null;
 }
 
 async function login() {
-  const ts = Date.now();
-  const { body, status } = await request("GET", `/`);
-  console.log("[DEBUG] status:", status, "| HTML length:", body.length);
+  console.log("[*] Ambil halaman login (id.php)...");
+  const { body, status } = await request("GET", "/id.php");
+  console.log(`[*] Status: ${status} | Length: ${body.length}`);
 
   const csrfToken = sessionCookies["cookie_csrf_token"];
-  const subtoken = extractSubtoken(body);
+  const subtoken  = extractSubtoken(body) || "";
 
-  const fs2 = require("fs");
-  fs2.writeFileSync("debug_html.txt", body);
-  console.log("[DEBUG] HTML length:", body.length);
-  console.log("[DEBUG] csrf_token:", csrfToken);
-  console.log("[DEBUG] subtoken:", subtoken);
+  console.log("[+] csrf_token:", csrfToken);
+  console.log("[+] subtoken:", subtoken || "(kosong)");
 
-  if (!csrfToken || !subtoken) {
-    console.log("[!] Gagal ambil CSRF token");
+  if (!csrfToken) {
+    console.log("[!] csrf_token ga ketemu di cookie");
     process.exit(1);
   }
 
@@ -106,22 +124,21 @@ async function login() {
     syncconfirm: "",
   }).toString();
 
-  const { body: loginRes } = await request("POST", "/smphone.app.index.php", payload);
+  const { body: loginRes } = await request("POST", "/smphone.app.index.php", payload, true);
+  console.log("[*] Login response:", loginRes.slice(0, 150));
 
-  if (loginRes.includes("OK") || sessionCookies["cookie_sessionhash"]) {
+  if (loginRes.startsWith("OK") || loginRes.includes("sukses") || sessionCookies["cookie_sessionhash"]) {
     console.log("[+] Login berhasil!");
   } else {
-    console.log(`[!] Login gagal: ${loginRes.slice(0, 100)}`);
-    process.exit(1);
+    console.log("[!] Login mungkin gagal, lanjut coba...");
   }
 }
 
-async function getCsrfSubtoken() {
-  const ts = Date.now();
-  const { body } = await request("GET", `/smphone.app.index.php?nopost=1&_=${ts}`);
+async function getTokens() {
+  const { body } = await request("GET", "/smphone.app.index.php");
   return {
     csrfToken: sessionCookies["cookie_csrf_token"],
-    subtoken: extractSubtoken(body),
+    subtoken:  extractSubtoken(body) || "",
   };
 }
 
@@ -136,18 +153,15 @@ async function generateEmail(csrfToken, subtoken) {
     recaptcha_token: "",
     _: ts,
   });
-  const { body } = await request("GET", `/index.php?${params}`);
+  const { body } = await request("GET", `/index.php?${params}`, null, true);
   if (body.startsWith("OK:")) return body.replace("OK:", "").trim();
-  console.log(`    [!] Response: ${body.slice(0, 100)}`);
+  console.log(`    [!] Generate response: ${body.slice(0, 100)}`);
   return null;
 }
 
 async function listEmails() {
   const ts = Date.now();
-  const { body } = await request(
-    "GET",
-    `/smphone.app.index._addrlist.php?t=${ts}&nopost=1&_=${ts}`
-  );
+  const { body } = await request("GET", `/smphone.app.index._addrlist.php?t=${ts}&nopost=1&_=${ts}`, null, true);
   const emails = [...body.matchAll(/[\w.\-+]+@[\w.\-]+\.[a-z]{2,}/g)].map((m) => m[0]);
   return [...new Set(emails)];
 }
@@ -155,16 +169,12 @@ async function listEmails() {
 (async () => {
   await login();
 
-  console.log("\n[*] Ambil CSRF token...");
-  const { csrfToken, subtoken } = await getCsrfSubtoken();
-  if (!subtoken) {
-    console.log("[!] Subtoken gagal");
-    process.exit(1);
-  }
+  console.log("\n[*] Ambil token...");
+  const { csrfToken, subtoken } = await getTokens();
 
-  console.log(`[+] Generate ${GENERATE_COUNT} email...\n`);
+  console.log(`\n[*] Generate ${COUNT} email...\n`);
   const generated = [];
-  for (let i = 0; i < GENERATE_COUNT; i++) {
+  for (let i = 0; i < COUNT; i++) {
     const email = await generateEmail(csrfToken, subtoken);
     if (email) {
       console.log(`[${i + 1}] ${email}`);
@@ -172,12 +182,11 @@ async function listEmails() {
     } else {
       console.log(`[${i + 1}] GAGAL`);
     }
-    await sleep(1000);
+    await sleep(1200);
   }
 
-  console.log("\n[*] Fetch semua email dari akun...");
+  console.log("\n[*] Fetch semua email...");
   const all = await listEmails();
-
   fs.writeFileSync("kuku_emails.txt", all.join("\n"));
   console.log(`\n[+] Total ${all.length} email → kuku_emails.txt`);
   all.forEach((e) => console.log(`  ${e}`));

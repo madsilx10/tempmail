@@ -69,6 +69,13 @@ async function login() {
   const csrfToken = sessionCookies["cookie_csrf_token"];
   const subtoken = extractSubtoken(body);
 
+  // DEBUG - hapus setelah beres
+  console.log("[DEBUG] csrf_token:", csrfToken);
+  console.log("[DEBUG] subtoken:", subtoken);
+  const idx = body.indexOf("csrf_subtoken");
+  if (idx !== -1) console.log("[DEBUG] html snippet:", body.slice(idx, idx + 100));
+  else console.log("[DEBUG] 'csrf_subtoken' tidak ditemukan di HTML");
+
   if (!csrfToken || !subtoken) {
     console.log("[!] Gagal ambil CSRF token");
     process.exit(1);

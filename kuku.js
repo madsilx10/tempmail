@@ -44,7 +44,7 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
   try {
     // ─── LOGIN ───────────────────────────────────────────────
     console.log('[*] Buka halaman login...');
-    await page.goto('https://m.kuku.lu/id.php', { waitUntil: 'networkidle' });
+    await page.goto('https://m.kuku.lu/smphone.app.index.php?pagemode_login=1&noindex=1', { waitUntil: 'networkidle' });
 
     // Tunggu Cloudflare selesai kalau ada
     await page.waitForFunction(

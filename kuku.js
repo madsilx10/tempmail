@@ -26,12 +26,13 @@ function cookieString() {
     .join("; ");
 }
 
-function request(method, path, body = null) {
+function request(method, path, body = null, redirectCount = 0) {
   return new Promise((resolve, reject) => {
+    if (redirectCount > 5) return reject(new Error("Too many redirects"));
     const headers = {
       "User-Agent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36",
       "X-Requested-With": "XMLHttpRequest",
-      "Accept": "*/*",
+      "Accept": "text/html,*/*",
       "Accept-Encoding": "identity",
       Cookie: cookieString(),
     };
@@ -43,24 +44,20 @@ function request(method, path, body = null) {
 
     const req = https.request({ host: BASE, path, method, headers }, (res) => {
       parseCookies(res.headers);
+
+      // follow redirect
+      if ([301, 302, 303].includes(res.statusCode) && res.headers.location) {
+        const loc = res.headers.location.replace(`https://${BASE}`, "");
+        console.log(`[*] Redirect → ${loc}`);
+        res.resume();
+        return resolve(request("GET", loc, null, redirectCount + 1));
+      }
+
       const chunks = [];
       res.on("data", (c) => chunks.push(c));
       res.on("end", () => {
         const buf = Buffer.concat(chunks);
-        const enc = res.headers["content-encoding"];
-        if (enc === "gzip") {
-          zlib.gunzip(buf, (err, decoded) => {
-            if (err) resolve({ body: buf.toString(), status: res.statusCode });
-            else resolve({ body: decoded.toString("utf8"), status: res.statusCode });
-          });
-        } else if (enc === "br") {
-          zlib.brotliDecompress(buf, (err, decoded) => {
-            if (err) resolve({ body: buf.toString(), status: res.statusCode });
-            else resolve({ body: decoded.toString("utf8"), status: res.statusCode });
-          });
-        } else {
-          resolve({ body: buf.toString("utf8"), status: res.statusCode });
-        }
+        resolve({ body: buf.toString("utf8"), status: res.statusCode });
       });
     });
     req.on("error", reject);
@@ -79,9 +76,9 @@ function extractSubtoken(html) {
 }
 
 async function login() {
-  console.log("[*] Ambil halaman login...");
   const ts = Date.now();
-  const { body } = await request("GET", `/smphone.app.index.php?nopost=1&_=${ts}`);
+  const { body, status } = await request("GET", `/`);
+  console.log("[DEBUG] status:", status, "| HTML length:", body.length);
 
   const csrfToken = sessionCookies["cookie_csrf_token"];
   const subtoken = extractSubtoken(body);

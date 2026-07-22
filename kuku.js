@@ -44,7 +44,7 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
   try {
     // ─── LOGIN ───────────────────────────────────────────────
     console.log('[*] Buka halaman login...');
-    await page.goto('https://m.kuku.lu/smphone.app.index.php?pagemode_login=1&noindex=1', { waitUntil: 'networkidle' });
+    await page.goto('https://m.kuku.lu/smphone.app.index.php?pagemode_login=1&noindex=1', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
     // Tunggu Cloudflare selesai kalau ada
     await page.waitForFunction(
@@ -62,7 +62,7 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
     await page.waitForSelector('input[name="password"]', { timeout: 30000 });
     await page.fill('input[name="password"]', PASSWORD);
     await page.click('input[type="submit"], button[type="submit"]');
-    await page.waitForNavigation({ waitUntil: 'networkidle', timeout: 15000 }).catch(() => {});
+    await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
     console.log('[+] Login selesai, URL:', page.url());
 
     // ─── GENERATE EMAIL ───────────────────────────────────────

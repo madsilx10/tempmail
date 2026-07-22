@@ -1,129 +1,139 @@
 // ============================================================================
-// KUKU.LU - Generate Email Otomatis
+// KUKU.LU - Generate Email Otomatis (HTTP mode, tanpa browser)
 // ============================================================================
 
-Object.defineProperty(process, 'platform', { get: () => 'linux' });
-
-// Tambah global node_modules ke search path
-require('module').globalPaths.push('/data/data/com.termux/files/usr/lib/node_modules');
-
-const { chromium } = require('playwright-extra');
-const stealthPlugin = require('puppeteer-extra-plugin-stealth')();
-chromium.use(stealthPlugin);
-
-const fs    = require('fs');
-const COUNT = parseInt(process.argv[2] || '5');
+const axios  = require('axios');
+const fs     = require('fs');
+const COUNT  = parseInt(process.argv[2] || '5');
 
 // === CONFIG ===
 const ID       = 'ISI_ID_LO';
 const PASSWORD = 'ISI_PASSWORD_LO';
 
+const BASE_URL = 'https://m.kuku.lu';
+const UA       = 'Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Mobile Safari/537.36';
+
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
+// Simpan & kirim cookie secara manual
+let cookieJar = {};
+
+function parseCookies(setCookieHeaders) {
+  if (!setCookieHeaders) return;
+  const headers = Array.isArray(setCookieHeaders) ? setCookieHeaders : [setCookieHeaders];
+  for (const header of headers) {
+    const [pair] = header.split(';');
+    const [name, ...rest] = pair.split('=');
+    cookieJar[name.trim()] = rest.join('=').trim();
+  }
+}
+
+function getCookieString() {
+  return Object.entries(cookieJar).map(([k, v]) => `${k}=${v}`).join('; ');
+}
+
 (async () => {
-  console.log('Memulai browser Chromium Termux...');
-
-  const browser = await chromium.launch({
-    executablePath: '/data/data/com.termux/files/usr/bin/chromium-browser',
-    headless: true,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-dev-shm-usage',
-      '--disable-gpu',
-      '--single-process',
-      '--disable-blink-features=AutomationControlled'
-    ]
-  });
-
-  const context = await browser.newContext({
-    userAgent: 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
-  });
-  const page = await context.newPage();
-
   try {
-    // ─── LOGIN ───────────────────────────────────────────────
-    console.log('[*] Buka halaman login...');
-    await page.goto('https://m.kuku.lu/smphone.app.index.php?pagemode_login=1&noindex=1', { waitUntil: 'domcontentloaded', timeout: 60000 });
+    // ─── STEP 1: GET login page → ambil CSRF cookie ───────────
+    console.log('[*] Ambil CSRF token...');
+    const getRes = await axios.get(`${BASE_URL}/smphone.app.index.php?pagemode_login=1&noindex=1`, {
+      headers: { 'User-Agent': UA },
+      maxRedirects: 5,
+    });
+    parseCookies(getRes.headers['set-cookie']);
+    console.log('[+] CSRF token:', cookieJar['cookie_csrf_token'] || 'tidak ditemukan');
 
-    // Tunggu Cloudflare selesai kalau ada
-    await page.waitForFunction(
-      () => !document.title.includes('Just a moment'),
-      { timeout: 30000 }
-    );
-    console.log('[+] Halaman login loaded, judul:', await page.title());
+    // ─── STEP 2: POST login ───────────────────────────────────
+    console.log('[*] Login...');
+    const loginParams = new URLSearchParams({
+      action:              'login',
+      nopost:              '1',
+      number:              ID,
+      password:            PASSWORD,
+      csrf_token_check:    cookieJar['cookie_csrf_token'] || '',
+      _:                   Date.now(),
+    });
 
-    // Tunggu halaman stabil setelah Cloudflare
-    await sleep(3000);
+    const loginRes = await axios.post(`${BASE_URL}/smphone.app.index.php`, loginParams.toString(), {
+      headers: {
+        'User-Agent':        UA,
+        'Content-Type':      'application/x-www-form-urlencoded; charset=UTF-8',
+        'X-Requested-With':  'XMLHttpRequest',
+        'Origin':            BASE_URL,
+        'Cookie':            getCookieString(),
+      },
+      maxRedirects: 5,
+    });
+    parseCookies(loginRes.headers['set-cookie']);
 
-    // Isi form login
-    await page.waitForSelector('input[name="number"]', { timeout: 30000 });
-    await page.fill('input[name="number"]', ID);
-    await page.waitForSelector('input[name="password"]', { timeout: 30000 });
-    await page.fill('input[name="password"]', PASSWORD);
-    await page.click('input[type="submit"], button[type="submit"]');
-    await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15000 }).catch(() => {});
-    console.log('[+] Login selesai, URL:', page.url());
+    const loginBody = loginRes.data;
+    console.log('[+] Respon login:', String(loginBody).slice(0, 100));
 
-    // ─── GENERATE EMAIL ───────────────────────────────────────
+    if (!cookieJar['cookie_sessionhash']) {
+      console.error('[!] Login gagal - session tidak ditemukan');
+      console.log('[!] Cookie saat ini:', getCookieString());
+      process.exit(1);
+    }
+    console.log('[+] Login berhasil!');
+
+    // ─── STEP 3: Generate email ───────────────────────────────
     const generated = [];
     console.log(`\n[*] Generate ${COUNT} email...\n`);
 
     for (let i = 0; i < COUNT; i++) {
-      const res = await page.evaluate(async () => {
-        const getCookie = (name) => {
-          const m = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
-          return m ? m[2] : '';
-        };
-        const csrf     = getCookie('cookie_csrf_token');
-        const subEl    = document.querySelector('[name="csrf_subtoken_check"]');
-        const subtoken = subEl ? subEl.value : '';
-
-        const params = new URLSearchParams({
-          action: 'addMailAddrByAuto',
-          nopost: '1',
-          by_system: '1',
-          csrf_token_check: csrf,
-          csrf_subtoken_check: subtoken,
-          recaptcha_token: '',
-          _: Date.now(),
-        });
-        const r = await fetch(`/index.php?${params}`, {
-          headers: { 'X-Requested-With': 'XMLHttpRequest' }
-        });
-        return r.text();
+      const params = new URLSearchParams({
+        action:              'addMailAddrByAuto',
+        nopost:              '1',
+        by_system:           '1',
+        csrf_token_check:    cookieJar['cookie_csrf_token'] || '',
+        csrf_subtoken_check: '',
+        recaptcha_token:     '',
+        _:                   Date.now(),
       });
 
-      if (res.startsWith('OK:')) {
-        const email = res.replace('OK:', '').trim();
+      const res = await axios.get(`${BASE_URL}/index.php?${params}`, {
+        headers: {
+          'User-Agent':       UA,
+          'X-Requested-With': 'XMLHttpRequest',
+          'Cookie':           getCookieString(),
+        },
+      });
+
+      const body = String(res.data);
+      if (body.startsWith('OK:')) {
+        const email = body.replace('OK:', '').trim();
         console.log(`[${i + 1}] ${email}`);
         generated.push(email);
       } else {
-        console.log(`[${i + 1}] GAGAL - ${res.slice(0, 80)}`);
+        console.log(`[${i + 1}] GAGAL - ${body.slice(0, 80)}`);
       }
       await sleep(1200);
     }
 
-    // ─── LIST SEMUA EMAIL ─────────────────────────────────────
+    // ─── STEP 4: List semua email ─────────────────────────────
     console.log('\n[*] Fetch semua email dari akun...');
-    const allEmails = await page.evaluate(async () => {
-      const ts = Date.now();
-      const r  = await fetch(`/smphone.app.index._addrlist.php?t=${ts}&nopost=1&_=${ts}`, {
-        headers: { 'X-Requested-With': 'XMLHttpRequest' }
-      });
-      const html = await r.text();
-      const matches = [...html.matchAll(/[\w.\-+]+@[\w.\-]+\.[a-z]{2,}/g)].map(m => m[0]);
-      return [...new Set(matches)];
+    const ts      = Date.now();
+    const listRes = await axios.get(`${BASE_URL}/smphone.app.index._addrlist.php?t=${ts}&nopost=1&_=${ts}`, {
+      headers: {
+        'User-Agent':       UA,
+        'X-Requested-With': 'XMLHttpRequest',
+        'Cookie':           getCookieString(),
+      },
     });
+
+    const html     = String(listRes.data);
+    const matches  = [...html.matchAll(/[\w.\-+]+@[\w.\-]+\.[a-z]{2,}/g)].map(m => m[0]);
+    const allEmails = [...new Set(matches)];
 
     fs.writeFileSync('kuku_emails.txt', allEmails.join('\n'));
     console.log(`\n[+] Total ${allEmails.length} email → kuku_emails.txt`);
     allEmails.forEach(e => console.log(`  ${e}`));
 
-  } catch (error) {
-    console.error('Terjadi eror:', error.message);
-  } finally {
-    await browser.close();
-    console.log('\nBrowser ditutup.');
+  } catch (err) {
+    console.error('Terjadi eror:', err.message);
+    if (err.response) {
+      console.error('Status:', err.response.status);
+      console.error('Body:', String(err.response.data).slice(0, 200));
+    }
   }
 })();

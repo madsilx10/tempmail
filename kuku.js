@@ -4,6 +4,9 @@
 
 Object.defineProperty(process, 'platform', { get: () => 'linux' });
 
+// Tambah global node_modules ke search path
+require('module').globalPaths.push('/data/data/com.termux/files/usr/lib/node_modules');
+
 const { chromium } = require('playwright-extra');
 const stealthPlugin = require('puppeteer-extra-plugin-stealth')();
 chromium.use(stealthPlugin);

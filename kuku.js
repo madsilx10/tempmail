@@ -31,7 +31,8 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
       '--disable-setuid-sandbox',
       '--disable-dev-shm-usage',
       '--disable-gpu',
-      '--single-process'
+      '--single-process',
+      '--disable-blink-features=AutomationControlled'
     ]
   });
 
@@ -52,8 +53,13 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
     );
     console.log('[+] Halaman login loaded, judul:', await page.title());
 
+    // Tunggu halaman stabil setelah Cloudflare
+    await sleep(3000);
+
     // Isi form login
+    await page.waitForSelector('input[name="number"]', { timeout: 30000 });
     await page.fill('input[name="number"]', ID);
+    await page.waitForSelector('input[name="password"]', { timeout: 30000 });
     await page.fill('input[name="password"]', PASSWORD);
     await page.click('input[type="submit"], button[type="submit"]');
     await page.waitForNavigation({ waitUntil: 'networkidle', timeout: 15000 }).catch(() => {});
